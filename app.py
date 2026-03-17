@@ -17,19 +17,6 @@ PORT = int(os.environ.get("PORT", 8080))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
 
-def esc(text: str) -> str:
-    text = str(text or "")
-    text = text.replace("\\", "\\\\")
-    text = text.replace(":", "\\:")
-    text = text.replace("'", "\\'")
-    text = text.replace(",", "\\,")
-    text = text.replace("[", "\\[")
-    text = text.replace("]", "\\]")
-    text = text.replace("%", "\\%")
-    text = text.replace("\n", "\\n")
-    return text
-
-
 def wrap_text(text: str, width: int) -> str:
     text = str(text or "").strip()
     if not text:
@@ -59,15 +46,31 @@ def render():
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
 
-    hook_wrapped = esc(wrap_text(hook, 20))
-    question_wrapped = esc(wrap_text(question, 16))
-    cta_wrapped = esc(wrap_text(cta, 22))
+    # Wrap text so it fits vertically
+    hook_wrapped = wrap_text(hook, 20)
+    question_wrapped = wrap_text(question, 16)
+    cta_wrapped = wrap_text(cta, 22)
 
     job_id = str(uuid.uuid4())
     input_path = os.path.join(TMP_DIR, f"{job_id}_input.mp4")
     output_name = f"{job_id}_rendered.mp4"
     output_path = os.path.join(OUT_DIR, output_name)
 
+    # Temporary text files for drawtext
+    hook_file = os.path.join(TMP_DIR, f"{job_id}_hook.txt")
+    question_file = os.path.join(TMP_DIR, f"{job_id}_question.txt")
+    cta_file = os.path.join(TMP_DIR, f"{job_id}_cta.txt")
+
+    with open(hook_file, "w", encoding="utf-8") as f:
+        f.write(hook_wrapped)
+
+    with open(question_file, "w", encoding="utf-8") as f:
+        f.write(question_wrapped)
+
+    with open(cta_file, "w", encoding="utf-8") as f:
+        f.write(cta_wrapped)
+
+    # Download source video
     r = requests.get(video_url, stream=True, timeout=120)
     r.raise_for_status()
     with open(input_path, "wb") as f:
@@ -75,20 +78,21 @@ def render():
             if chunk:
                 f.write(chunk)
 
+    # FFmpeg drawtext using text files instead of inline text
     vf = (
-        f"drawtext=text='{hook_wrapped}':"
-        f"x=(w-text_w)/2:y=h*0.10:"
-        f"fontsize=42:fontcolor=white:"
+        f"drawtext=textfile='{hook_file}':"
+        f"x=(w-text_w)/2:y=h*0.08:"
+        f"fontsize=38:fontcolor=white:"
         f"line_spacing=10:"
         f"shadowcolor=black:shadowx=3:shadowy=3,"
-        f"drawtext=text='{question_wrapped}':"
+        f"drawtext=textfile='{question_file}':"
         f"x=(w-text_w)/2:y=(h-text_h)/2:"
-        f"fontsize=50:fontcolor=white:"
+        f"fontsize=46:fontcolor=white:"
         f"line_spacing=12:"
         f"shadowcolor=black:shadowx=3:shadowy=3,"
-        f"drawtext=text='{cta_wrapped}':"
-        f"x=(w-text_w)/2:y=h*0.78:"
-        f"fontsize=38:fontcolor=white:"
+        f"drawtext=textfile='{cta_file}':"
+        f"x=(w-text_w)/2:y=h*0.80:"
+        f"fontsize=34:fontcolor=white:"
         f"line_spacing=10:"
         f"shadowcolor=black:shadowx=3:shadowy=3"
     )
@@ -105,7 +109,14 @@ def render():
         output_path
     ]
 
-    subprocess.run(cmd, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        return jsonify({
+            "success": False,
+            "error": "ffmpeg failed",
+            "stderr": result.stderr
+        }), 500
 
     if PUBLIC_BASE_URL:
         public_url = f"{PUBLIC_BASE_URL}/outputs/{output_name}"

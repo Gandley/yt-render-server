@@ -16,9 +16,30 @@ os.makedirs(OUT_DIR, exist_ok=True)
 PORT = int(os.environ.get("PORT", 8080))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
+# A font that is usually available in Debian-based containers
+FONT_FILE = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
+def clean_text(text: str) -> str:
+    text = str(text or "").strip()
+
+    # Normalize common punctuation that can cause odd rendering
+    text = text.replace("’", "'")
+    text = text.replace("‘", "'")
+    text = text.replace("“", '"')
+    text = text.replace("”", '"')
+    text = text.replace("—", "-")
+    text = text.replace("–", "-")
+    text = text.replace("…", "...")
+
+    # Remove carriage returns so ffmpeg does not render box characters
+    text = text.replace("\r", "")
+
+    return text
+
 
 def wrap_text(text: str, width: int) -> str:
-    text = str(text or "").strip()
+    text = clean_text(text)
     if not text:
         return ""
     return "\n".join(textwrap.wrap(text, width=width))
@@ -46,7 +67,7 @@ def render():
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
 
-    # Wrap text so it fits vertically
+    # Wrap text so it fits
     hook_wrapped = wrap_text(hook, 20)
     question_wrapped = wrap_text(question, 16)
     cta_wrapped = wrap_text(cta, 22)
@@ -56,18 +77,19 @@ def render():
     output_name = f"{job_id}_rendered.mp4"
     output_path = os.path.join(OUT_DIR, output_name)
 
-    # Temporary text files for drawtext
+    # Temporary text files
     hook_file = os.path.join(TMP_DIR, f"{job_id}_hook.txt")
     question_file = os.path.join(TMP_DIR, f"{job_id}_question.txt")
     cta_file = os.path.join(TMP_DIR, f"{job_id}_cta.txt")
 
-    with open(hook_file, "w", encoding="utf-8") as f:
+    # Force Unix line endings so ffmpeg does not render CR characters
+    with open(hook_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(hook_wrapped)
 
-    with open(question_file, "w", encoding="utf-8") as f:
+    with open(question_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(question_wrapped)
 
-    with open(cta_file, "w", encoding="utf-8") as f:
+    with open(cta_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(cta_wrapped)
 
     # Download source video
@@ -78,19 +100,24 @@ def render():
             if chunk:
                 f.write(chunk)
 
-    # FFmpeg drawtext using text files instead of inline text
     vf = (
-        f"drawtext=textfile='{hook_file}':"
+        f"drawtext=fontfile='{FONT_FILE}':"
+        f"textfile='{hook_file}':"
+        f"text_align=center:"
         f"x=(w-text_w)/2:y=h*0.08:"
         f"fontsize=38:fontcolor=white:"
         f"line_spacing=10:"
         f"shadowcolor=black:shadowx=3:shadowy=3,"
-        f"drawtext=textfile='{question_file}':"
+        f"drawtext=fontfile='{FONT_FILE}':"
+        f"textfile='{question_file}':"
+        f"text_align=center:"
         f"x=(w-text_w)/2:y=(h-text_h)/2:"
         f"fontsize=46:fontcolor=white:"
         f"line_spacing=12:"
         f"shadowcolor=black:shadowx=3:shadowy=3,"
-        f"drawtext=textfile='{cta_file}':"
+        f"drawtext=fontfile='{FONT_FILE}':"
+        f"textfile='{cta_file}':"
+        f"text_align=center:"
         f"x=(w-text_w)/2:y=h*0.80:"
         f"fontsize=34:fontcolor=white:"
         f"line_spacing=10:"

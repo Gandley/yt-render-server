@@ -16,14 +16,13 @@ os.makedirs(OUT_DIR, exist_ok=True)
 PORT = int(os.environ.get("PORT", 8080))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
-# A font that is usually available in Debian-based containers
 FONT_FILE = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
 def clean_text(text: str) -> str:
     text = str(text or "").strip()
 
-    # Normalize common punctuation that can cause odd rendering
+    # Normalize punctuation
     text = text.replace("’", "'")
     text = text.replace("‘", "'")
     text = text.replace("“", '"')
@@ -31,11 +30,18 @@ def clean_text(text: str) -> str:
     text = text.replace("—", "-")
     text = text.replace("–", "-")
     text = text.replace("…", "...")
-
-    # Remove carriage returns so ffmpeg does not render box characters
     text = text.replace("\r", "")
 
-    return text
+    # Keep only safe printable ASCII + newlines
+    allowed = []
+    for ch in text:
+        code = ord(ch)
+        if 32 <= code <= 126:
+            allowed.append(ch)
+        elif ch == "\n":
+            allowed.append(ch)
+
+    return "".join(allowed)
 
 
 def wrap_text(text: str, width: int) -> str:
@@ -67,7 +73,6 @@ def render():
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
 
-    # Wrap text so it fits
     hook_wrapped = wrap_text(hook, 20)
     question_wrapped = wrap_text(question, 16)
     cta_wrapped = wrap_text(cta, 22)
@@ -77,12 +82,10 @@ def render():
     output_name = f"{job_id}_rendered.mp4"
     output_path = os.path.join(OUT_DIR, output_name)
 
-    # Temporary text files
     hook_file = os.path.join(TMP_DIR, f"{job_id}_hook.txt")
     question_file = os.path.join(TMP_DIR, f"{job_id}_question.txt")
     cta_file = os.path.join(TMP_DIR, f"{job_id}_cta.txt")
 
-    # Force Unix line endings so ffmpeg does not render CR characters
     with open(hook_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(hook_wrapped)
 
@@ -92,7 +95,6 @@ def render():
     with open(cta_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(cta_wrapped)
 
-    # Download source video
     r = requests.get(video_url, stream=True, timeout=120)
     r.raise_for_status()
     with open(input_path, "wb") as f:

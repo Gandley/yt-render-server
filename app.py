@@ -3,6 +3,7 @@ import os
 import uuid
 import subprocess
 import requests
+import textwrap
 
 app = Flask(__name__)
 
@@ -15,6 +16,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 PORT = int(os.environ.get("PORT", 8080))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
+
 def esc(text: str) -> str:
     text = str(text or "")
     text = text.replace("\\", "\\\\")
@@ -24,28 +26,43 @@ def esc(text: str) -> str:
     text = text.replace("[", "\\[")
     text = text.replace("]", "\\]")
     text = text.replace("%", "\\%")
-    text = text.replace("\n", " ")
+    text = text.replace("\n", "\\n")
     return text
+
+
+def wrap_text(text: str, width: int) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    return "\n".join(textwrap.wrap(text, width=width))
+
 
 @app.get("/health")
 def health():
     return {"ok": True}
 
+
 @app.get("/outputs/<path:filename>")
 def serve_output(filename):
     return send_from_directory(OUT_DIR, filename)
+
 
 @app.post("/render")
 def render():
     data = request.get_json(force=True)
 
     video_url = data.get("video_url")
-    hook = esc(data.get("hook", ""))
-    question = esc(data.get("question", ""))
-    cta = esc(data.get("cta", ""))
+    hook = data.get("hook", "")
+    question = data.get("question", "")
+    cta = data.get("cta", "")
 
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
+
+    # Wrap text into multiple lines first
+    hook_wrapped = esc(wrap_text(hook, 20))
+    question_wrapped = esc(wrap_text(question, 18))
+    cta_wrapped = esc(wrap_text(cta, 22))
 
     job_id = str(uuid.uuid4())
     input_path = os.path.join(TMP_DIR, f"{job_id}_input.mp4")
@@ -59,13 +76,25 @@ def render():
             if chunk:
                 f.write(chunk)
 
+    # Smaller fonts + multi-line + safe margins
     vf = (
-        f"drawtext=text='{hook}':x=(w-text_w)/2:y=h*0.18:"
-        f"fontsize=52:fontcolor=white:shadowcolor=black:shadowx=3:shadowy=3,"
-        f"drawtext=text='{question}':x=(w-text_w)/2:y=(h-text_h)/2:"
-        f"fontsize=64:fontcolor=white:shadowcolor=black:shadowx=3:shadowy=3,"
-        f"drawtext=text='{cta}':x=(w-text_w)/2:y=h*0.78:"
-        f"fontsize=48:fontcolor=white:shadowcolor=black:shadowx=3:shadowy=3"
+        f"drawtext=text='{hook_wrapped}':"
+        f"x=(w-text_w)/2:y=h*0.10:"
+        f"fontsize=42:fontcolor=white:"
+        f"line_spacing=10:"
+        f"shadowcolor=black:shadowx=3:shadowy=3:"
+
+        f"drawtext=text='{question_wrapped}':"
+        f"x=(w-text_w)/2:y=(h-text_h)/2:"
+        f"fontsize=50:fontcolor=white:"
+        f"line_spacing=12:"
+        f"shadowcolor=black:shadowx=3:shadowy=3:"
+
+        f"drawtext=text='{cta_wrapped}':"
+        f"x=(w-text_w)/2:y=h*0.78:"
+        f"fontsize=38:fontcolor=white:"
+        f"line_spacing=10:"
+        f"shadowcolor=black:shadowx=3:shadowy=3"
     )
 
     cmd = [
@@ -92,6 +121,7 @@ def render():
         "video_url": public_url,
         "filename": output_name
     })
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)

@@ -21,8 +21,6 @@ FONT_FILE = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 def clean_text(text: str) -> str:
     text = str(text or "").strip()
-
-    # Normalize punctuation
     text = text.replace("’", "'")
     text = text.replace("‘", "'")
     text = text.replace("“", '"')
@@ -31,24 +29,54 @@ def clean_text(text: str) -> str:
     text = text.replace("–", "-")
     text = text.replace("…", "...")
     text = text.replace("\r", "")
+    text = text.replace("\n", " ")
 
-    # Keep only safe printable ASCII + newlines
     allowed = []
     for ch in text:
         code = ord(ch)
         if 32 <= code <= 126:
             allowed.append(ch)
-        elif ch == "\n":
-            allowed.append(ch)
 
     return "".join(allowed)
 
 
-def wrap_text(text: str, width: int) -> str:
+def wrap_lines(text: str, width: int) -> list[str]:
     text = clean_text(text)
     if not text:
-        return ""
-    return "\n".join(textwrap.wrap(text, width=width))
+        return []
+    return textwrap.wrap(text, width=width)
+
+
+def esc_ffmpeg(text: str) -> str:
+    text = text.replace("\\", "\\\\")
+    text = text.replace(":", "\\:")
+    text = text.replace("'", "\\'")
+    text = text.replace(",", "\\,")
+    text = text.replace("[", "\\[")
+    text = text.replace("]", "\\]")
+    text = text.replace("%", "\\%")
+    return text
+
+
+def build_block_filters(lines: list[str], start_y_expr: str, fontsize: int, line_gap: int) -> list[str]:
+    filters = []
+    for i, line in enumerate(lines):
+        safe_line = esc_ffmpeg(line)
+        if i == 0:
+            y_expr = start_y_expr
+        else:
+            y_expr = f"{start_y_expr}+{i}*{line_gap}"
+
+        filters.append(
+            f"drawtext=fontfile='{FONT_FILE}':"
+            f"text='{safe_line}':"
+            f"x=(w-text_w)/2:"
+            f"y={y_expr}:"
+            f"fontsize={fontsize}:"
+            f"fontcolor=white:"
+            f"shadowcolor=black:shadowx=3:shadowy=3"
+        )
+    return filters
 
 
 @app.get("/health")
@@ -73,27 +101,14 @@ def render():
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
 
-    hook_wrapped = wrap_text(hook, 20)
-    question_wrapped = wrap_text(question, 16)
-    cta_wrapped = wrap_text(cta, 22)
+    hook_lines = wrap_lines(hook, 24)
+    question_lines = wrap_lines(question, 18)
+    cta_lines = wrap_lines(cta, 24)
 
     job_id = str(uuid.uuid4())
     input_path = os.path.join(TMP_DIR, f"{job_id}_input.mp4")
     output_name = f"{job_id}_rendered.mp4"
     output_path = os.path.join(OUT_DIR, output_name)
-
-    hook_file = os.path.join(TMP_DIR, f"{job_id}_hook.txt")
-    question_file = os.path.join(TMP_DIR, f"{job_id}_question.txt")
-    cta_file = os.path.join(TMP_DIR, f"{job_id}_cta.txt")
-
-    with open(hook_file, "w", encoding="utf-8", newline="\n") as f:
-        f.write(hook_wrapped)
-
-    with open(question_file, "w", encoding="utf-8", newline="\n") as f:
-        f.write(question_wrapped)
-
-    with open(cta_file, "w", encoding="utf-8", newline="\n") as f:
-        f.write(cta_wrapped)
 
     r = requests.get(video_url, stream=True, timeout=120)
     r.raise_for_status()
@@ -102,29 +117,34 @@ def render():
             if chunk:
                 f.write(chunk)
 
-    vf = (
-        f"drawtext=fontfile='{FONT_FILE}':"
-        f"textfile='{hook_file}':"
-        f"text_align=center:"
-        f"x=(w-text_w)/2:y=h*0.08:"
-        f"fontsize=38:fontcolor=white:"
-        f"line_spacing=10:"
-        f"shadowcolor=black:shadowx=3:shadowy=3,"
-        f"drawtext=fontfile='{FONT_FILE}':"
-        f"textfile='{question_file}':"
-        f"text_align=center:"
-        f"x=(w-text_w)/2:y=(h-text_h)/2:"
-        f"fontsize=46:fontcolor=white:"
-        f"line_spacing=12:"
-        f"shadowcolor=black:shadowx=3:shadowy=3,"
-        f"drawtext=fontfile='{FONT_FILE}':"
-        f"textfile='{cta_file}':"
-        f"text_align=center:"
-        f"x=(w-text_w)/2:y=h*0.80:"
-        f"fontsize=34:fontcolor=white:"
-        f"line_spacing=10:"
-        f"shadowcolor=black:shadowx=3:shadowy=3"
-    )
+    filters = []
+
+    # Top hook block
+    filters.extend(build_block_filters(
+        lines=hook_lines,
+        start_y_expr="h*0.08",
+        fontsize=38,
+        line_gap=46
+    ))
+
+    # Middle question block
+    # Start slightly above center so a 3-4 line question sits nicely in the middle
+    filters.extend(build_block_filters(
+        lines=question_lines,
+        start_y_expr="h*0.42",
+        fontsize=44,
+        line_gap=54
+    ))
+
+    # Bottom CTA block
+    filters.extend(build_block_filters(
+        lines=cta_lines,
+        start_y_expr="h*0.80",
+        fontsize=32,
+        line_gap=42
+    ))
+
+    vf = ",".join(filters)
 
     cmd = [
         "ffmpeg",

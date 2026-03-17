@@ -47,21 +47,16 @@ def wrap_lines(text: str, width: int) -> list[str]:
     return textwrap.wrap(text, width=width)
 
 
-def esc_ffmpeg(text: str) -> str:
-    text = text.replace("\\", "\\\\")
-    text = text.replace(":", "\\:")
-    text = text.replace("'", "\\'")
-    text = text.replace(",", "\\,")
-    text = text.replace("[", "\\[")
-    text = text.replace("]", "\\]")
-    text = text.replace("%", "\\%")
-    return text
-
-
-def build_block_filters(lines: list[str], start_y_expr: str, fontsize: int, line_gap: int) -> list[str]:
+def build_block_filters(lines, prefix, start_y_expr, fontsize, line_gap, job_id):
     filters = []
+    text_files = []
+
     for i, line in enumerate(lines):
-        safe_line = esc_ffmpeg(line)
+        line_file = os.path.join(TMP_DIR, f"{job_id}_{prefix}_{i}.txt")
+        with open(line_file, "w", encoding="utf-8", newline="\n") as f:
+            f.write(line)
+        text_files.append(line_file)
+
         if i == 0:
             y_expr = start_y_expr
         else:
@@ -69,14 +64,15 @@ def build_block_filters(lines: list[str], start_y_expr: str, fontsize: int, line
 
         filters.append(
             f"drawtext=fontfile='{FONT_FILE}':"
-            f"text='{safe_line}':"
+            f"textfile='{line_file}':"
             f"x=(w-text_w)/2:"
             f"y={y_expr}:"
             f"fontsize={fontsize}:"
             f"fontcolor=white:"
             f"shadowcolor=black:shadowx=3:shadowy=3"
         )
-    return filters
+
+    return filters, text_files
 
 
 @app.get("/health")
@@ -118,31 +114,40 @@ def render():
                 f.write(chunk)
 
     filters = []
+    temp_text_files = []
 
-    # Top hook block
-    filters.extend(build_block_filters(
+    hook_filters, hook_files = build_block_filters(
         lines=hook_lines,
+        prefix="hook",
         start_y_expr="h*0.08",
         fontsize=38,
-        line_gap=46
-    ))
+        line_gap=46,
+        job_id=job_id
+    )
+    filters.extend(hook_filters)
+    temp_text_files.extend(hook_files)
 
-    # Middle question block
-    # Start slightly above center so a 3-4 line question sits nicely in the middle
-    filters.extend(build_block_filters(
+    question_filters, question_files = build_block_filters(
         lines=question_lines,
+        prefix="question",
         start_y_expr="h*0.42",
         fontsize=44,
-        line_gap=54
-    ))
+        line_gap=54,
+        job_id=job_id
+    )
+    filters.extend(question_filters)
+    temp_text_files.extend(question_files)
 
-    # Bottom CTA block
-    filters.extend(build_block_filters(
+    cta_filters, cta_files = build_block_filters(
         lines=cta_lines,
+        prefix="cta",
         start_y_expr="h*0.80",
         fontsize=32,
-        line_gap=42
-    ))
+        line_gap=42,
+        job_id=job_id
+    )
+    filters.extend(cta_filters)
+    temp_text_files.extend(cta_files)
 
     vf = ",".join(filters)
 

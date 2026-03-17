@@ -59,9 +59,8 @@ def render():
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
 
-    # Wrap text into multiple lines first
     hook_wrapped = esc(wrap_text(hook, 20))
-    question_wrapped = esc(wrap_text(question, 18))
+    question_wrapped = esc(wrap_text(question, 16))
     cta_wrapped = esc(wrap_text(cta, 22))
 
     job_id = str(uuid.uuid4())
@@ -76,20 +75,17 @@ def render():
             if chunk:
                 f.write(chunk)
 
-    # Smaller fonts + multi-line + safe margins
     vf = (
         f"drawtext=text='{hook_wrapped}':"
         f"x=(w-text_w)/2:y=h*0.10:"
         f"fontsize=42:fontcolor=white:"
         f"line_spacing=10:"
-        f"shadowcolor=black:shadowx=3:shadowy=3:"
-
+        f"shadowcolor=black:shadowx=3:shadowy=3,"
         f"drawtext=text='{question_wrapped}':"
         f"x=(w-text_w)/2:y=(h-text_h)/2:"
         f"fontsize=50:fontcolor=white:"
         f"line_spacing=12:"
-        f"shadowcolor=black:shadowx=3:shadowy=3:"
-
+        f"shadowcolor=black:shadowx=3:shadowy=3,"
         f"drawtext=text='{cta_wrapped}':"
         f"x=(w-text_w)/2:y=h*0.78:"
         f"fontsize=38:fontcolor=white:"
@@ -105,7 +101,7 @@ def render():
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-crf", "23",
-        "-c:a", "copy",
+        "-c:a", "aac",
         output_path
     ]
 

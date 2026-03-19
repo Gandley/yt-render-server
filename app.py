@@ -10,8 +10,11 @@ app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TMP_DIR = os.path.join(BASE_DIR, "tmp")
 OUT_DIR = os.path.join(BASE_DIR, "outputs")
+AUDIO_DIR = os.path.join(BASE_DIR, "public", "audio")
+
 os.makedirs(TMP_DIR, exist_ok=True)
 os.makedirs(OUT_DIR, exist_ok=True)
+os.makedirs(AUDIO_DIR, exist_ok=True)
 
 PORT = int(os.environ.get("PORT", 8080))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
@@ -83,6 +86,11 @@ def health():
 @app.get("/outputs/<path:filename>")
 def serve_output(filename):
     return send_from_directory(OUT_DIR, filename)
+
+
+@app.get("/audio/<path:filename>")
+def serve_audio(filename):
+    return send_from_directory(AUDIO_DIR, filename)
 
 
 @app.post("/render")

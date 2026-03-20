@@ -4,6 +4,7 @@ import uuid
 import subprocess
 import requests
 import textwrap
+from urllib.parse import urlparse, unquote
 
 app = Flask(__name__)
 
@@ -78,6 +79,47 @@ def build_block_filters(lines, prefix, start_y_expr, fontsize, line_gap, job_id)
     return filters, text_files
 
 
+def get_public_url(filename: str) -> str:
+    if PUBLIC_BASE_URL:
+        return f"{PUBLIC_BASE_URL}/outputs/{filename}"
+    return f"/outputs/{filename}"
+
+
+def resolve_local_audio_path(audio_url: str) -> str | None:
+    """
+    If the audio URL points to this same app's /audio/... route,
+    convert it to a local filesystem path instead of downloading it over HTTP.
+    """
+    if not audio_url:
+        return None
+
+    audio_url = str(audio_url).lstrip("=").strip()
+
+    try:
+        parsed = urlparse(audio_url)
+        path = parsed.path or ""
+    except Exception:
+        return None
+
+    if not path.startswith("/audio/"):
+        return None
+
+    filename = unquote(path.replace("/audio/", "", 1)).strip()
+    if not filename:
+        return None
+
+    local_path = os.path.abspath(os.path.join(AUDIO_DIR, filename))
+    audio_root = os.path.abspath(AUDIO_DIR)
+
+    if not local_path.startswith(audio_root):
+        return None
+
+    if not os.path.exists(local_path):
+        return None
+
+    return local_path
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -104,6 +146,8 @@ def render():
 
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
+
+    video_url = str(video_url).lstrip("=").strip()
 
     hook_lines = wrap_lines(hook, 24)
     question_lines = wrap_lines(question, 18)
@@ -180,14 +224,9 @@ def render():
             "stderr": result.stderr
         }), 500
 
-    if PUBLIC_BASE_URL:
-        public_url = f"{PUBLIC_BASE_URL}/outputs/{output_name}"
-    else:
-        public_url = f"/outputs/{output_name}"
-
     return jsonify({
         "success": True,
-        "video_url": public_url,
+        "video_url": get_public_url(output_name),
         "filename": output_name
     })
 
@@ -196,8 +235,8 @@ def render():
 def merge_audio():
     data = request.get_json(force=True)
 
-    video_url = data.get("video_url")
-    audio_url = data.get("audio_url")
+    video_url = str(data.get("video_url", "")).lstrip("=").strip()
+    audio_url = str(data.get("audio_url", "")).lstrip("=").strip()
 
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
@@ -208,9 +247,10 @@ def merge_audio():
     job_id = str(uuid.uuid4())
 
     input_video_path = os.path.join(TMP_DIR, f"{job_id}_input_video.mp4")
-    input_audio_path = os.path.join(TMP_DIR, f"{job_id}_input_audio.mp3")
     output_name = f"{job_id}_merged.mp4"
     output_path = os.path.join(OUT_DIR, output_name)
+
+    cleanup_paths = [input_video_path]
 
     try:
         video_response = requests.get(video_url, stream=True, timeout=120)
@@ -220,18 +260,28 @@ def merge_audio():
                 if chunk:
                     f.write(chunk)
 
-        audio_response = requests.get(audio_url, stream=True, timeout=120)
-        audio_response.raise_for_status()
-        with open(input_audio_path, "wb") as f:
-            for chunk in audio_response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
+        local_audio_path = resolve_local_audio_path(audio_url)
+
+        if local_audio_path:
+            audio_input = local_audio_path
+        else:
+            input_audio_path = os.path.join(TMP_DIR, f"{job_id}_input_audio.mp3")
+            cleanup_paths.append(input_audio_path)
+
+            audio_response = requests.get(audio_url, stream=True, timeout=120)
+            audio_response.raise_for_status()
+            with open(input_audio_path, "wb") as f:
+                for chunk in audio_response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+
+            audio_input = input_audio_path
 
         cmd = [
             "ffmpeg",
             "-y",
             "-i", input_video_path,
-            "-i", input_audio_path,
+            "-i", audio_input,
             "-filter_complex", "[1:a]volume=0.15,afade=t=in:st=0:d=0.5[a1]",
             "-map", "0:v:0",
             "-map", "[a1]",
@@ -250,22 +300,25 @@ def merge_audio():
                 "stderr": result.stderr
             }), 500
 
-        if PUBLIC_BASE_URL:
-            public_url = f"{PUBLIC_BASE_URL}/outputs/{output_name}"
-        else:
-            public_url = f"/outputs/{output_name}"
-
         return jsonify({
             "success": True,
-            "video_url": public_url,
+            "video_url": get_public_url(output_name),
             "filename": output_name
         })
 
+    except requests.RequestException as e:
+        return jsonify({
+            "success": False,
+            "error": "download failed",
+            "details": str(e),
+            "video_url": video_url,
+            "audio_url": audio_url
+        }), 500
+
     finally:
-        if os.path.exists(input_video_path):
-            os.remove(input_video_path)
-        if os.path.exists(input_audio_path):
-            os.remove(input_audio_path)
+        for path in cleanup_paths:
+            if os.path.exists(path):
+                os.remove(path)
 
 
 if __name__ == "__main__":

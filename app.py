@@ -192,5 +192,81 @@ def render():
     })
 
 
+@app.post("/merge-audio")
+def merge_audio():
+    data = request.get_json(force=True)
+
+    video_url = data.get("video_url")
+    audio_url = data.get("audio_url")
+
+    if not video_url:
+        return jsonify({"error": "video_url is required"}), 400
+
+    if not audio_url:
+        return jsonify({"error": "audio_url is required"}), 400
+
+    job_id = str(uuid.uuid4())
+
+    input_video_path = os.path.join(TMP_DIR, f"{job_id}_input_video.mp4")
+    input_audio_path = os.path.join(TMP_DIR, f"{job_id}_input_audio.mp3")
+    output_name = f"{job_id}_merged.mp4"
+    output_path = os.path.join(OUT_DIR, output_name)
+
+    try:
+        video_response = requests.get(video_url, stream=True, timeout=120)
+        video_response.raise_for_status()
+        with open(input_video_path, "wb") as f:
+            for chunk in video_response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+        audio_response = requests.get(audio_url, stream=True, timeout=120)
+        audio_response.raise_for_status()
+        with open(input_audio_path, "wb") as f:
+            for chunk in audio_response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", input_video_path,
+            "-i", input_audio_path,
+            "-filter_complex", "[1:a]volume=0.15,afade=t=in:st=0:d=0.5[a1]",
+            "-map", "0:v:0",
+            "-map", "[a1]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-shortest",
+            output_path
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            return jsonify({
+                "success": False,
+                "error": "ffmpeg merge failed",
+                "stderr": result.stderr
+            }), 500
+
+        if PUBLIC_BASE_URL:
+            public_url = f"{PUBLIC_BASE_URL}/outputs/{output_name}"
+        else:
+            public_url = f"/outputs/{output_name}"
+
+        return jsonify({
+            "success": True,
+            "video_url": public_url,
+            "filename": output_name
+        })
+
+    finally:
+        if os.path.exists(input_video_path):
+            os.remove(input_video_path)
+        if os.path.exists(input_audio_path):
+            os.remove(input_audio_path)
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
